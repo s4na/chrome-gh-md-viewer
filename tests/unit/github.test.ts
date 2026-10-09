@@ -16,6 +16,30 @@ function pull(headSha = head) {
   };
 }
 describe("GitHub PR snapshots", () => {
+  it("includes a file renamed from Markdown to another extension", async () => {
+    const client = new GitHubClient("", async (input) =>
+      Response.json(
+        String(input).includes("/compare/")
+          ? { merge_base_commit: { sha: merge } }
+          : String(input).includes("/files?")
+            ? [
+                {
+                  filename: "notes.txt",
+                  previous_filename: "notes.md",
+                  status: "renamed",
+                },
+                { filename: "index.ts", status: "modified" },
+              ]
+            : pull(),
+      ),
+    );
+    const snapshot = await client.snapshot({
+      owner: "owner",
+      repo: "repo",
+      number: 42,
+    });
+    expect(snapshot.files.map((file) => file.filename)).toEqual(["notes.txt"]);
+  });
   it("stops reading oversized Markdown", async () => {
     const client = new GitHubClient(
       "",

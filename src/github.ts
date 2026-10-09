@@ -151,7 +151,12 @@ export class GitHubClient {
         repo: pull.head.repo.name,
         sha: pull.head.sha,
       },
-      files: allFiles.filter((file) => isMarkdown(file.filename)),
+      files: allFiles.filter(
+        (file) =>
+          isMarkdown(file.filename) ||
+          (file.previous_filename !== undefined &&
+            isMarkdown(file.previous_filename)),
+      ),
     };
   }
   async text(revision: Revision, path: string): Promise<string> {

@@ -6,6 +6,20 @@ import {
 } from "../../src/markdown";
 
 describe("rendered Markdown", () => {
+  it("preserves HTML containers across Markdown blocks", () => {
+    const container = document.createElement("div");
+    const source =
+      "<details>\n<summary>Summary</summary>\n\nHidden body\n\n</details>";
+    for (const diff of [false, true]) {
+      container.innerHTML = renderMarkdown("", source, diff);
+      expect(container.querySelector("details p")?.textContent).toBe(
+        "Hidden body",
+      );
+      expect(container.querySelector("details summary")?.textContent).toBe(
+        "Summary",
+      );
+    }
+  });
   it("resolves renamed file assets separately and preserves link fragments", async () => {
     const container = document.createElement("div");
     container.innerHTML = renderMarkdown(

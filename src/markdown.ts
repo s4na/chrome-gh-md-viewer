@@ -1,6 +1,6 @@
 import { diffArrays } from "diff";
 import DOMPurify from "dompurify";
-import { marked, type Token, type TokensList } from "marked";
+import { marked } from "marked";
 import type { Revision } from "./types";
 
 export function escapeHtml(text: string): string {
@@ -12,25 +12,41 @@ export function escapeHtml(text: string): string {
       ] ?? char,
   );
 }
-function tokenHtml(token: Token, links: TokensList["links"]): string {
-  const tokens = [token] as TokensList;
-  tokens.links = links;
-  return DOMPurify.sanitize(marked.parser(tokens, { gfm: true }), {
-    USE_PROFILES: { html: true },
-    ALLOW_DATA_ATTR: false,
-    FORBID_TAGS: [
-      "style",
-      "script",
-      "form",
-      "button",
-      "textarea",
-      "select",
-      "iframe",
-      "object",
-      "embed",
-    ],
-    FORBID_ATTR: ["style", "id", "name"],
-  });
+function markdownBlocks(source: string): { html: string }[] {
+  // Parse and sanitize the complete document so HTML containers spanning
+  // Markdown tokens (for example details/summary) stay structurally intact.
+  const template = document.createElement("template");
+  template.innerHTML = DOMPurify.sanitize(
+    marked.parse(source, { gfm: true, async: false }),
+    {
+      USE_PROFILES: { html: true },
+      ALLOW_DATA_ATTR: false,
+      FORBID_TAGS: [
+        "style",
+        "script",
+        "form",
+        "button",
+        "textarea",
+        "select",
+        "iframe",
+        "object",
+        "embed",
+      ],
+      FORBID_ATTR: ["style", "id", "name"],
+    },
+  );
+  return Array.from(template.content.childNodes)
+    .filter(
+      (node) =>
+        node.nodeType === Node.ELEMENT_NODE ||
+        (node.nodeType === Node.TEXT_NODE && node.textContent?.trim()),
+    )
+    .map((node) => ({
+      html:
+        node instanceof Element
+          ? node.outerHTML
+          : escapeHtml(node.textContent ?? ""),
+    }));
 }
 export function renderMarkdown(
   before: string,
@@ -38,20 +54,8 @@ export function renderMarkdown(
   diff: boolean,
   removed = false,
 ): string {
-  const oldTokens = marked.lexer(before, { gfm: true });
-  const newTokens = marked.lexer(after, { gfm: true });
-  const oldBlocks = oldTokens
-    .filter((token) => token.type !== "space")
-    .map((token) => ({
-      raw: token.raw,
-      html: tokenHtml(token, oldTokens.links),
-    }));
-  const newBlocks = newTokens
-    .filter((token) => token.type !== "space")
-    .map((token) => ({
-      raw: token.raw,
-      html: tokenHtml(token, newTokens.links),
-    }));
+  const oldBlocks = markdownBlocks(before);
+  const newBlocks = markdownBlocks(after);
   if (!diff)
     return (removed ? oldBlocks : newBlocks)
       .map(
@@ -60,7 +64,7 @@ export function renderMarkdown(
       )
       .join("");
   const changes = diffArrays(oldBlocks, newBlocks, {
-    comparator: (a, b) => a.raw === b.raw && a.html === b.html,
+    comparator: (a, b) => a.html === b.html,
     timeout: 1000,
   }) ?? [
     { removed: true, added: false, value: oldBlocks },
@@ -72,9 +76,7 @@ export function renderMarkdown(
       const side = part.removed ? "before" : "after";
       return part.value
         .map((block) => {
-          const body =
-            block.html.trim() ||
-            `<pre><code>${escapeHtml(block.raw)}</code></pre>`;
+          const body = block.html;
           return kind
             ? `<section class="change ${kind}" data-revision="${side}"><span class="change-mark" aria-label="${part.added ? "追加" : "削除"}">${part.added ? "+" : "−"}</span><div>${body}</div></section>`
             : `<div data-revision="${side}">${body}</div>`;

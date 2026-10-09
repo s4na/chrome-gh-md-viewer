@@ -43,9 +43,10 @@ GitHubの画面に読み込まれているソース差分から、変更前後�
 npm ci
 npx playwright install chromium
 npm run check
+npm audit
 zizmor --offline --persona pedantic .github
 ```
 
 `npm run lint` はBiomeとTypeScript、`npm test` はページ上の差分読取り・描画の単体テスト、`npm run test:e2e` は実際に拡張を読み込むChromiumテストです。E2EではPRページの応答だけをテスト用に差し替え、コンテンツスクリプト・モーダルの本実装を通します。APIアクセスが発生しないこと、行の省略・後から読み込まれた差分の再読取りも確認します。
 
-GitHub Actionsでlint、型チェック、単体テスト、拡張ビルド、ブラウザテスト、zizmorを実行します。ActionsはコミットSHAに固定し、read-only権限と `persist-credentials: false` を使用します。
+GitHub Actionsでlint、型チェック、単体テスト、拡張ビルド、ブラウザテスト、npm audit、zizmorを実行します。npm auditでは開発用依存も含め、脆弱性が検出された場合にCIを失敗させます。ActionsはコミットSHAに固定し、read-only権限と `persist-credentials: false` を使用します。

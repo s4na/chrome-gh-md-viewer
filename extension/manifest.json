@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "GitHub Markdown PR Viewer",
   "description": "PRに表示されているMarkdownの差分を、ツリーと最大化つきモーダルで読むプレビュー。",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minimum_chrome_version": "123",
   "content_scripts": [
     {

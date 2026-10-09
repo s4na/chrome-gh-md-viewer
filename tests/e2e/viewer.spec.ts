@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium, expect, test } from "@playwright/test";
 
+import manifest from "../../extension/manifest.json" with { type: "json" };
 import { diffFile } from "../fixtures/diff";
 
+const { version } = manifest;
 const pageDiff =
   diffFile(
     "docs/design/retry.md",
@@ -81,6 +83,19 @@ test("extension reads displayed source only, with diff, tree, maximize and focus
         }),
     );
     const page = await context.newPage();
+    const diagnostics: Array<{
+      version: string;
+      stage: string;
+      files?: number;
+      ranges?: number;
+      error?: { name: string; message: string; stack: string };
+    }> = [];
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("console", async (entry) => {
+      if (entry.text().startsWith("[GH Markdown Viewer]"))
+        diagnostics.push(await entry.args()[1].jsonValue());
+    });
     await page.goto("https://github.com/owner/repo/pull/42/files");
     await page.locator("#diff-retry header button").click();
     const modal = page.getByRole("dialog");
@@ -186,6 +201,25 @@ test("extension reads displayed source only, with diff, tree, maximize and focus
     await page.keyboard.press("Escape");
     await expect(modal).not.toBeVisible();
     await expect(page.locator("#diff-retry header button")).toBeFocused();
+    await expect
+      .poll(() =>
+        diagnostics.some(
+          (entry) => entry.stage === "startup" && entry.version === version,
+        ),
+      )
+      .toBe(true);
+    expect(
+      diagnostics.some(
+        (entry) => entry.stage === "read:complete" && entry.files === 3,
+      ),
+    ).toBe(true);
+    expect(
+      diagnostics.some(
+        (entry) => entry.stage === "render:complete" && entry.ranges === 1,
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(diagnostics)).not.toContain("最大3回");
+    expect(pageErrors).toEqual([]);
     expect(calls).toEqual([]);
   } finally {
     await context.close();
@@ -221,6 +255,19 @@ test("empty or unloaded source never asks for authentication and can be re-read"
         }),
     );
     const page = await context.newPage();
+    const diagnostics: Array<{
+      version: string;
+      stage: string;
+      files?: number;
+      ranges?: number;
+      error?: { name: string; message: string; stack: string };
+    }> = [];
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("console", async (entry) => {
+      if (entry.text().startsWith("[GH Markdown Viewer]"))
+        diagnostics.push(await entry.args()[1].jsonValue());
+    });
     await page.goto("https://github.com/owner/repo/pull/42/changes");
     await page
       .getByRole("button", { name: "Markdownプレビュー", exact: true })
@@ -278,6 +325,63 @@ test("empty or unloaded source never asks for authentication and can be re-read"
     await expect(modal.locator(".message")).toContainText(
       "Markdownの差分はありません",
     );
+    await modal
+      .getByRole("button", { name: "プレビューを閉じる", exact: true })
+      .click();
+    await page.evaluate(
+      (html) => {
+        const box = document.createElement("div");
+        box.innerHTML = html;
+        document.body.append(box);
+      },
+      diffFile(
+        "docs/failure.md",
+        [
+          {
+            kind: "context",
+            before: 1,
+            after: 1,
+            text: `PRIVATE_MARKDOWN_DO_NOT_LOG${"x".repeat(2 * 1024 * 1024)}`,
+          },
+        ],
+        "diff-failure",
+      ),
+    );
+    await page
+      .getByRole("button", { name: "Markdownプレビュー", exact: true })
+      .first()
+      .click();
+    await expect(modal.getByRole("alert")).toContainText("2MB");
+    await expect(modal.locator(".diagnostic-note")).toContainText(
+      `v${version}`,
+    );
+    await expect
+      .poll(() =>
+        diagnostics.some(
+          (entry) =>
+            entry.stage === "read" && entry.error?.message.includes("2MB"),
+        ),
+      )
+      .toBe(true);
+    const failure = diagnostics.find((entry) =>
+      entry.error?.message.includes("2MB"),
+    );
+    expect(failure?.version).toBe(version);
+    expect(failure?.error?.name).toBe("Error");
+    expect(failure?.error?.stack).toContain("content.js");
+    expect(JSON.stringify(diagnostics)).not.toContain(
+      "PRIVATE_MARKDOWN_DO_NOT_LOG",
+    );
+    await page.evaluate(() => {
+      const source = document.querySelector("#diff-failure .diff-text-inner");
+      if (source) source.textContent = "# 復旧した本文";
+    });
+    await modal
+      .getByRole("button", { name: "再読み込み", exact: true })
+      .click();
+    await expect(modal.locator(".document h1")).toHaveText("復旧した本文");
+    expect(diagnostics.some((entry) => entry.stage === "refresh")).toBe(true);
+    expect(pageErrors).toEqual([]);
     expect(calls).toEqual([]);
   } finally {
     await context.close();

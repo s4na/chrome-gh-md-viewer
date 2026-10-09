@@ -657,3 +657,8 @@ img.change.removed {
     height: 44px;
   }
 }
+
+.diagnostic-note {
+  font-size: 12px;
+  color: var(--muted);
+}

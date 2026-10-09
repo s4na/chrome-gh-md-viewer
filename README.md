@@ -10,9 +10,10 @@ GitHubのPRから離れず、画面に読み込まれたMarkdownの差分をモ�
 
 ## インストール
 
-Node.js 24以上を用意し、次を実行します。
+Node.js 24以上とnpm 11.13以上を用意し、次を実行します。
 
 ```sh
+npm run check:release-age
 npm ci
 npm run build
 ```
@@ -40,6 +41,7 @@ GitHubの画面に読み込まれているソース差分から、変更前後�
 ## 開発と検証
 
 ```sh
+npm run check:release-age
 npm ci
 npx playwright install chromium
 npm run check
@@ -50,3 +52,5 @@ zizmor --offline --persona pedantic .github
 `npm run lint` はBiomeとTypeScript、`npm test` はページ上の差分読取り・描画の単体テスト、`npm run test:e2e` は実際に拡張を読み込むChromiumテストです。E2EではPRページの応答だけをテスト用に差し替え、コンテンツスクリプト・モーダルの本実装を通します。APIアクセスが発生しないこと、行の省略・後から読み込まれた差分の再読取りも確認します。
 
 GitHub Actionsでlint、型チェック、単体テスト、拡張ビルド、ブラウザテスト、npm audit、zizmorを実行します。npm auditでは開発用依存も含め、脆弱性が検出された場合にCIを失敗させます。ActionsはコミットSHAに固定し、read-only権限と `persist-credentials: false` を使用します。
+
+`npm install` / `npm update` は `.npmrc` の `min-release-age=7` により、公開から7日以上経過したバージョンに限定します。CIは `npm ci` より前に `npm run check:release-age` を実行し、lockfile内の直接・間接・開発用・optional依存をnpm registryの公開日と照合します。7日未満のバージョンや公開日を確認できない依存があれば失敗します。

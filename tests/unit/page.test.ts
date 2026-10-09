@@ -48,6 +48,18 @@ describe("displayed PR source diffs", () => {
       "# Notes\n+ Keep the literal plus",
     );
   });
+  it("reads legacy source text when the table cell itself is the inner source", () => {
+    document.body.innerHTML =
+      '<div class="file" data-path="notes.md"><header class="file-header">notes.md</header><table class="diff-table"><tr><td class="blob-num" data-line-number="1"></td><td class="blob-num" data-line-number="1"></td><td class="blob-code blob-code-inner blob-code-context js-file-line"># Notes</td></tr><tr><td class="blob-num" data-line-number="2"></td><td class="blob-num"></td><td class="blob-code blob-code-inner blob-code-deletion js-file-line">Retry 5</td></tr><tr><td class="blob-num"></td><td class="blob-num" data-line-number="2"></td><td class="blob-code blob-code-inner blob-code-addition js-file-line">Retry 3</td></tr></table></div>';
+    expect(readDisplayedFiles()[0].ranges[0]).toMatchObject({
+      before: "# Notes\nRetry 5",
+      after: "# Notes\nRetry 3",
+      beforeStart: 1,
+      beforeEnd: 2,
+      afterStart: 1,
+      afterEnd: 2,
+    });
+  });
   it("reads split-view cells separately and preserves code whitespace", () => {
     document.body.innerHTML =
       '<section role="region" id="diff-split"><header><h3><code>code.md</code></h3></header><table role="grid" aria-label="Diff for: code.md"><tr><td data-diff-side="left" data-line-number="1"></td><td class="diff-text-cell" data-diff-side="left" data-line-number="1"><code class="diff-text deletion"><div class="diff-text-inner">  retry: 5</div></code></td><td data-diff-side="right" data-line-number="1"></td><td class="diff-text-cell" data-diff-side="right" data-line-number="1"><code class="diff-text addition"><div class="diff-text-inner">    retry: 3</div></code></td></tr></table></section>';

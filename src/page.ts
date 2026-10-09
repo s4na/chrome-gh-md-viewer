@@ -66,7 +66,8 @@ function rangesFromRows(node: HTMLElement): DisplayedRange[] {
     for (const cell of sourceCells) {
       const code =
         cell.querySelector<HTMLElement>(".diff-text-inner, .blob-code-inner") ??
-        cell.querySelector<HTMLElement>("code.diff-text");
+        cell.querySelector<HTMLElement>("code.diff-text") ??
+        (cell.matches(".blob-code-inner") ? cell : null);
       if (!code || code.classList.contains("hunk")) continue;
       const text = code.textContent ?? "";
       bytes += new TextEncoder().encode(text).length;

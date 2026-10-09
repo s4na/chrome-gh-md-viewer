@@ -31,19 +31,29 @@ export function createTree(
     for (const [name, child] of Array.from(node.directories).sort(([a], [b]) =>
       a.localeCompare(b),
     )) {
+      let label = name;
+      let directory = child;
+      while (!directory.files.length && directory.directories.size === 1) {
+        const [nextName, next] = Array.from(directory.directories)[0];
+        label += `/${nextName}`;
+        directory = next;
+      }
       const item = document.createElement("li");
       const folder = document.createElement("details");
       folder.open = true;
-      folder.dataset.path = parentPath + name;
+      folder.dataset.path = parentPath + label;
       const summary = document.createElement("summary");
-      summary.className = "tree-row";
+      summary.className = "tree-row tree-folder";
       summary.style.setProperty("--depth", String(depth));
       summary.innerHTML = `${icon("chevron-right")}${icon("file-directory")}<span class="file-name"></span><span></span>`;
       summary
         .querySelector(".file-name")
-        ?.append(document.createTextNode(name));
-      summary.title = parentPath + name;
-      folder.append(summary, draw(child, depth + 1, `${parentPath}${name}/`));
+        ?.append(document.createTextNode(label));
+      summary.title = parentPath + label;
+      folder.append(
+        summary,
+        draw(directory, depth + 1, `${parentPath}${label}/`),
+      );
       item.append(folder);
       list.append(item);
     }
@@ -83,5 +93,40 @@ export function createTree(
   const tree = document.createElement("div");
   tree.className = "tree-content";
   tree.append(draw(root, 0, ""));
+  const empty = document.createElement("p");
+  empty.className = "tree-empty";
+  empty.textContent = "一致するファイルがありません。";
+  empty.setAttribute("role", "status");
+  empty.hidden = true;
+  tree.append(empty);
   return tree;
+}
+
+export function filterTree(tree: HTMLElement, value: string): void {
+  const query = value.trim().toLocaleLowerCase();
+  const files = Array.from(
+    tree.querySelectorAll<HTMLButtonElement>("[data-filename]"),
+  );
+  for (const button of files)
+    button.hidden = !button.dataset.filename
+      ?.toLocaleLowerCase()
+      .includes(query);
+  const folders = Array.from(
+    tree.querySelectorAll<HTMLDetailsElement>("details"),
+  );
+  for (const folder of folders) {
+    if (query && folder.dataset.filterOpen === undefined)
+      folder.dataset.filterOpen = String(folder.open);
+    const visible = Array.from(
+      folder.querySelectorAll<HTMLButtonElement>("[data-filename]"),
+    ).some((button) => !button.hidden);
+    folder.hidden = !visible;
+    if (query) folder.open = visible;
+    else if (folder.dataset.filterOpen !== undefined) {
+      folder.open = folder.dataset.filterOpen === "true";
+      delete folder.dataset.filterOpen;
+    }
+  }
+  const empty = tree.querySelector<HTMLElement>(".tree-empty");
+  if (empty) empty.hidden = files.some((file) => !file.hidden);
 }

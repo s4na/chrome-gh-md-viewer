@@ -1,6 +1,6 @@
 import { isMarkdown, parsePullUrl } from "./github";
 import { prepareDocument, renderMarkdown } from "./markdown";
-import { createTree, icon } from "./tree";
+import { createTree, filterTree, icon } from "./tree";
 import type {
   ChangedFile,
   FileContents,
@@ -32,7 +32,7 @@ launcher.innerHTML = `${icon("markdown")}<span>Markdownプレビュー</span>`;
 launcher.hidden = true;
 const dialog = document.createElement("dialog");
 dialog.setAttribute("aria-labelledby", "viewer-title");
-dialog.innerHTML = `<header class="modal-head"><div class="modal-title"><h2 id="viewer-title">Markdownプレビュー</h2><div class="version" role="status"></div></div><div class="actions"><button class="tree-toggle" type="button" aria-label="ファイル一覧" aria-controls="file-list" aria-expanded="false">${icon("sidebar-collapse")}</button><button class="diff-toggle" type="button" aria-label="差分表示" aria-pressed="true"><span class="minus">−</span><span class="plus">＋</span><span class="diff-label">差分 ON</span></button><span class="divider"></span><button class="maximize" type="button" aria-label="最大化" title="最大化" aria-pressed="false">${icon("screen-full")}</button><button class="close" type="button" aria-label="プレビューを閉じる" title="閉じる · Esc">${icon("x")}<span class="close-text">閉じる</span></button></div></header><div class="layout"><nav class="file-nav" id="file-list" aria-label="変更されたMarkdownファイル"><header class="tree-head">ファイル<span class="file-count">0</span></header><div class="tree-slot"></div></nav><div class="document-area"><div class="notice" hidden>削除されたファイルの変更前を表示しています。</div><article class="document" aria-label="Markdown本文"></article></div></div><footer class="modal-foot"><span class="footer-path"></span><button class="return" type="button">このファイルの差分へ戻る</button></footer>`;
+dialog.innerHTML = `<header class="modal-head"><div class="modal-title">${icon("markdown")}<h2 id="viewer-title">Markdownプレビュー</h2><span class="context"></span></div><div class="actions"><button class="tree-toggle icon-button" type="button" aria-label="ファイル一覧" aria-controls="file-list" aria-expanded="false">${icon("sidebar-collapse")}</button><button class="diff-toggle" type="button" aria-label="差分表示" aria-pressed="false"><span class="diff-symbol" aria-hidden="true">−＋</span><span class="diff-label">差分 OFF</span></button><span class="divider"></span><button class="maximize icon-button" type="button" aria-label="最大化" title="最大化" aria-pressed="false">${icon("screen-full")}</button><button class="close icon-button" type="button" aria-label="プレビューを閉じる" title="閉じる · Esc">${icon("x")}</button></div></header><div class="layout"><nav class="file-nav" id="file-list" aria-label="変更されたMarkdownファイル"><header class="tree-head">ファイル<span class="file-count">0</span></header><div class="filter-wrap">${icon("search")}<input class="file-filter" type="search" aria-label="ファイルを絞り込む" placeholder="ファイルを絞り込む…" disabled></div><div class="tree-slot"></div></nav><div class="document-pane"><div class="document-frame"><header class="document-head">${icon("file")}<span class="file-path"></span><span class="version" role="status"></span><button class="return" type="button" aria-label="このファイルの差分へ戻る" disabled>元の差分へ</button></header><div class="document-area"><div class="notice" hidden>削除されたファイルの変更前を表示しています。</div><article class="document" aria-label="Markdown本文"></article></div></div></div></div>`;
 shadow.append(launcher, dialog);
 document.body.append(host);
 function element<T extends HTMLElement>(selector: string): T {
@@ -46,10 +46,11 @@ const diffButton = element<HTMLButtonElement>(".diff-toggle");
 const maxButton = element<HTMLButtonElement>(".maximize");
 const fileToggle = element<HTMLButtonElement>(".tree-toggle");
 const returnButton = element<HTMLButtonElement>(".return");
+const fileFilter = element<HTMLInputElement>(".file-filter");
 let snapshot: Snapshot | null = null;
 let selected: ChangedFile | null = null;
 let contents: FileContents | null = null;
-let diffEnabled = true;
+let diffEnabled = false;
 let requestVersion = 0;
 let route = "";
 let opener: HTMLElement | null = null;
@@ -62,6 +63,7 @@ function filesOpen(open: boolean): void {
 }
 function render(): void {
   if (!snapshot || !selected || !contents) return;
+  article.classList.toggle("with-diff", diffEnabled);
   article.innerHTML = renderMarkdown(
     contents.before,
     contents.after,
@@ -85,8 +87,7 @@ function render(): void {
     article.textContent = "このMarkdownファイルは空です。";
   element(".notice").hidden = selected.status !== "removed";
   element(".version").textContent =
-    `${selected.filename} · ${selected.status === "removed" ? "削除前" : "変更後"} · ${(selected.status === "removed" ? snapshot.before.sha : snapshot.after.sha).slice(0, 7)}`;
-  element(".footer-path").textContent = selected.filename;
+    `${selected.status === "removed" ? "削除前" : "変更後"} ${(selected.status === "removed" ? snapshot.before.sha : snapshot.after.sha).slice(0, 7)}`;
   for (const button of shadow.querySelectorAll<HTMLButtonElement>(
     "[data-filename]",
   )) {
@@ -97,6 +98,7 @@ function render(): void {
 }
 function message(text: string, error = false): void {
   article.replaceChildren();
+  article.classList.remove("with-diff");
   element(".notice").hidden = true;
   const box = document.createElement("div");
   box.className = "message";
@@ -131,7 +133,16 @@ async function choose(file: ChangedFile): Promise<void> {
   area.scrollTop = 0;
   if (matchMedia("(max-width:640px)").matches) fileToggle.focus();
   message("Markdown全文を読み込んでいます…");
-  element(".version").textContent = file.filename;
+  element(".file-path").textContent = file.filename;
+  element(".file-path").title = file.filename;
+  element(".version").textContent = "";
+  for (const button of shadow.querySelectorAll<HTMLButtonElement>(
+    "[data-filename]",
+  )) {
+    if (button.dataset.filename === file.filename)
+      button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  }
   try {
     const data =
       cache.get(file.filename) ??
@@ -159,14 +170,21 @@ async function load(preferred?: string): Promise<void> {
   snapshot = null;
   cache.clear();
   returnButton.disabled = true;
+  fileFilter.disabled = true;
+  fileFilter.value = "";
   element(".tree-slot").replaceChildren();
   element(".file-count").textContent = "0";
-  element(".footer-path").textContent = "";
+  element(".file-path").textContent = "";
+  element(".file-path").removeAttribute("title");
+  element(".version").textContent = "";
+  element(".context").textContent = "";
   message("PRの変更ファイルを読み込んでいます…");
   try {
     const data = await request<Snapshot>({ type: "load-pr" });
     if (version !== requestVersion || !dialog.open) return;
     snapshot = data;
+    element(".context").textContent =
+      `${data.context.owner}/${data.context.repo} #${data.context.number}`;
     element(".file-count").textContent = String(data.files.length);
     element(".tree-slot").replaceChildren(
       createTree(data.files, (file) => {
@@ -178,6 +196,7 @@ async function load(preferred?: string): Promise<void> {
       return;
     }
     returnButton.disabled = false;
+    fileFilter.disabled = false;
     await choose(
       data.files.find((file) => file.filename === preferred) ?? data.files[0],
     );
@@ -222,6 +241,10 @@ maxButton.addEventListener("click", maximize);
 fileToggle.addEventListener("click", () =>
   filesOpen(fileToggle.getAttribute("aria-expanded") !== "true"),
 );
+fileFilter.addEventListener("input", () => {
+  const tree = shadow.querySelector<HTMLElement>(".tree-content");
+  if (tree) filterTree(tree, fileFilter.value);
+});
 diffButton.addEventListener("click", () => {
   diffEnabled = !diffEnabled;
   diffButton.setAttribute("aria-pressed", String(diffEnabled));

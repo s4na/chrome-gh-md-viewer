@@ -87,6 +87,18 @@ test("extension entry, API loader, rendered diff, tree, maximize and focus", asy
     await modal.getByRole("button", { name: "差分表示", exact: true }).click();
     await expect(modal.locator(".change.added")).not.toHaveCount(0);
     await expect(modal.locator(".change.removed")).not.toHaveCount(0);
+    await expect(modal.locator(".document p del")).toHaveText("5");
+    await expect(modal.locator(".document p ins")).toHaveText("3");
+    await expect(modal.locator(".document pre")).toHaveCount(1);
+    await expect(modal.locator(".document code del")).toHaveText("5");
+    await expect(modal.locator(".document code ins")).toHaveText("3");
+    await expect(modal.locator(".document table .change")).toHaveCount(0);
+    await expect(modal.locator(".change-mark")).toHaveCount(0);
+    expect(
+      await modal
+        .locator(".document p del")
+        .evaluate((node) => getComputedStyle(node).textDecorationLine),
+    ).toBe("line-through");
     await modal.getByRole("button", { name: "差分表示", exact: true }).click();
     await expect(modal.locator(".change")).toHaveCount(0);
     await expect(modal.locator(".document")).toContainText("最大3回");

@@ -16,8 +16,6 @@
   --selected: light-dark(#eaeef2, #262c36);
   --add: light-dark(#dafbe1, #12261e);
   --remove: light-dark(#ffebe9, #2b1a1e);
-  --add-gutter: light-dark(#aceebb, #20462f);
-  --remove-gutter: light-dark(#ffcecb, #542426);
 }
 * {
   box-sizing: border-box;
@@ -505,53 +503,27 @@ dialog.maximized {
   border: 0;
   background: var(--border);
 }
-.document.with-diff {
-  padding: 16px 0;
-}
-.document.with-diff > [data-revision] {
-  display: flow-root;
-  position: relative;
-  padding: 8px 24px 8px 48px;
-}
-.document .change > div > :first-child,
-.document.with-diff > [data-revision] > :first-child {
-  margin-top: 0;
-}
-.document .change > div > :last-child,
-.document.with-diff > [data-revision] > :last-child {
-  margin-bottom: 0;
-}
-.change {
-  border-radius: 0;
-}
 .change.added {
   background: var(--add);
 }
 .change.removed {
   background: var(--remove);
+  text-decoration: line-through;
 }
-.change > div {
-  min-width: 0;
+ins.change {
+  text-decoration: none;
 }
-.change-mark {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 32px;
-  padding-top: 8px;
-  text-align: center;
-  font:
-    12px / 21px ui-monospace,
-    monospace;
+ins.change,
+del.change {
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
-.added .change-mark {
-  background: var(--add-gutter);
-  color: light-dark(#116329, #7ee787);
+img.change.added {
+  outline: 2px solid light-dark(#1a7f37, #3fb950);
 }
-.removed .change-mark {
-  background: var(--remove-gutter);
-  color: light-dark(#82071e, #ff7b72);
+img.change.removed {
+  outline: 2px solid light-dark(#cf222e, #f85149);
 }
 .notice,
 .message {
@@ -646,13 +618,6 @@ dialog.maximized {
   }
   .return {
     font-size: 11px;
-  }
-  .document.with-diff > [data-revision] {
-    padding-right: 16px;
-    padding-left: 40px;
-  }
-  .change-mark {
-    width: 24px;
   }
 }
 @media (pointer: coarse) {

@@ -449,6 +449,7 @@ details[open] > summary > svg:first-child {
 }
 @media (pointer: coarse) {
   button,
+  .actions button,
   .tree-row {
     min-height: 44px;
   }

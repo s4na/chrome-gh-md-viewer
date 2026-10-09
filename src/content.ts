@@ -1,25 +1,10 @@
-import { isMarkdown, parsePullUrl } from "./github";
+import { parsePullUrl } from "./github";
 import { prepareDocument, renderMarkdown } from "./markdown";
+import { type DisplayedFile, readDisplayedFiles } from "./page";
 import { createTree, filterTree, icon } from "./tree";
-import type {
-  ChangedFile,
-  FileContents,
-  Request,
-  Response,
-  Snapshot,
-} from "./types";
+import type { ChangedFile } from "./types";
 import css from "./viewer.css";
 
-async function request<T>(message: Request): Promise<T> {
-  const response = await chrome.runtime.sendMessage<Request, Response<T>>(
-    message,
-  );
-  if (!response?.ok)
-    throw new Error(
-      response?.error ?? "拡張を再読み込みしてからPRを開き直してください。",
-    );
-  return response.data;
-}
 const host = document.createElement("gh-md-viewer");
 const shadow = host.attachShadow({ mode: "open" });
 const style = document.createElement("style");
@@ -32,7 +17,7 @@ launcher.innerHTML = `${icon("markdown")}<span>Markdownプレビュー</span>`;
 launcher.hidden = true;
 const dialog = document.createElement("dialog");
 dialog.setAttribute("aria-labelledby", "viewer-title");
-dialog.innerHTML = `<header class="modal-head"><div class="modal-title">${icon("markdown")}<h2 id="viewer-title">Markdownプレビュー</h2><span class="context"></span></div><div class="actions"><button class="tree-toggle icon-button" type="button" aria-label="ファイル一覧" aria-controls="file-list" aria-expanded="false">${icon("sidebar-collapse")}</button><button class="diff-toggle" type="button" aria-label="差分表示" aria-pressed="false"><span class="diff-symbol" aria-hidden="true">−＋</span><span class="diff-label">差分 OFF</span></button><span class="divider"></span><button class="maximize icon-button" type="button" aria-label="最大化" title="最大化" aria-pressed="false">${icon("screen-full")}</button><button class="close icon-button" type="button" aria-label="プレビューを閉じる" title="閉じる · Esc">${icon("x")}</button></div></header><div class="layout"><nav class="file-nav" id="file-list" aria-label="変更されたMarkdownファイル"><header class="tree-head">ファイル<span class="file-count">0</span></header><div class="filter-wrap">${icon("search")}<input class="file-filter" type="search" aria-label="ファイルを絞り込む" placeholder="ファイルを絞り込む…" disabled></div><div class="tree-slot"></div></nav><div class="document-pane"><div class="document-frame"><header class="document-head">${icon("file")}<span class="file-path"></span><span class="version" role="status"></span><button class="return" type="button" aria-label="このファイルの差分へ戻る" disabled>元の差分へ</button></header><div class="document-area"><div class="notice" hidden>削除されたファイルの変更前を表示しています。</div><article class="document" aria-label="Markdown本文"></article></div></div></div></div>`;
+dialog.innerHTML = `<header class="modal-head"><div class="modal-title">${icon("markdown")}<h2 id="viewer-title">Markdownプレビュー</h2><span class="context"></span></div><div class="actions"><button class="tree-toggle icon-button" type="button" aria-label="ファイル一覧" aria-controls="file-list" aria-expanded="false">${icon("sidebar-collapse")}</button><button class="diff-toggle" type="button" aria-label="差分表示" aria-pressed="false"><span class="diff-symbol" aria-hidden="true">−＋</span><span class="diff-label">差分 OFF</span></button><span class="divider"></span><button class="maximize icon-button" type="button" aria-label="最大化" title="最大化" aria-pressed="false">${icon("screen-full")}</button><button class="close icon-button" type="button" aria-label="プレビューを閉じる" title="閉じる · Esc">${icon("x")}</button></div></header><div class="layout"><nav class="file-nav" id="file-list" aria-label="変更されたMarkdownファイル"><header class="tree-head">ファイル<span class="file-count">0</span></header><div class="filter-wrap">${icon("search")}<input class="file-filter" type="search" aria-label="ファイルを絞り込む" placeholder="ファイルを絞り込む…" disabled></div><div class="tree-slot"></div></nav><div class="document-pane"><div class="document-frame"><header class="document-head">${icon("file")}<span class="file-path"></span><span class="version" role="status"></span><button class="return" type="button" aria-label="このファイルの差分へ戻る" disabled>元の差分へ</button></header><div class="document-area"><div class="notice" hidden><span class="notice-text"></span><button class="refresh" type="button">再読み込み</button></div><article class="document" aria-label="Markdown本文"></article></div></div></div></div>`;
 shadow.append(launcher, dialog);
 document.body.append(host);
 function element<T extends HTMLElement>(selector: string): T {
@@ -47,54 +32,58 @@ const maxButton = element<HTMLButtonElement>(".maximize");
 const fileToggle = element<HTMLButtonElement>(".tree-toggle");
 const returnButton = element<HTMLButtonElement>(".return");
 const fileFilter = element<HTMLInputElement>(".file-filter");
-let snapshot: Snapshot | null = null;
-let selected: ChangedFile | null = null;
-let contents: FileContents | null = null;
+let files: DisplayedFile[] = [];
+let selected: DisplayedFile | null = null;
 let diffEnabled = false;
-let requestVersion = 0;
 let route = "";
 let opener: HTMLElement | null = null;
 let previousOverflow = "";
-const cache = new Map<string, FileContents>();
 
 function filesOpen(open: boolean): void {
   element(".layout").classList.toggle("files-open", open);
   fileToggle.setAttribute("aria-expanded", String(open));
 }
 function render(): void {
-  if (!snapshot || !selected || !contents) return;
+  if (!selected?.ranges.length) return;
+  const rendered = document.createElement("div");
   article.classList.toggle("with-diff", diffEnabled);
-  article.innerHTML = renderMarkdown(
-    contents.before,
-    contents.after,
-    diffEnabled,
-    selected.status === "removed",
-  );
+  for (const range of selected.ranges) {
+    const section = document.createElement("section");
+    section.className = "preview-range";
+    const label = (start: number | null, end: number | null) =>
+      start === null
+        ? "なし"
+        : start === end
+          ? String(start)
+          : `${start}〜${end}`;
+    const rangeHead = document.createElement("header");
+    rangeHead.className = "range-head";
+    rangeHead.textContent = `変更前 ${label(range.beforeStart, range.beforeEnd)} 行 · 変更後 ${label(range.afterStart, range.afterEnd)} 行`;
+    const body = document.createElement("div");
+    body.innerHTML = renderMarkdown(
+      range.before,
+      range.after,
+      diffEnabled,
+      selected.status === "removed",
+    );
+    if (!body.textContent && !body.querySelector("img,hr,input"))
+      body.textContent = "この範囲に表示する本文はありません。";
+    section.append(rangeHead, body);
+    rendered.append(section);
+  }
   prepareDocument(
-    article,
+    rendered,
     selected.filename,
-    { before: snapshot.before, after: snapshot.after },
-    (path, side) =>
-      request<string>({
-        type: "load-image",
-        snapshotId: snapshot?.id ?? "",
-        side,
-        path,
-      }),
+    { before: selected.before, after: selected.after },
+    undefined,
     selected.previous_filename ?? selected.filename,
   );
-  if (!article.childNodes.length)
-    article.textContent = "このMarkdownファイルは空です。";
-  element(".notice").hidden = selected.status !== "removed";
+  article.replaceChildren(...rendered.childNodes);
+  element(".notice").hidden = false;
+  element(".notice-text").textContent =
+    "GitHubで読み込まれている行のみを表示しています。省略された行は元の差分で展開し、再読み込みしてください。";
   element(".version").textContent =
-    `${selected.status === "removed" ? "削除前" : "変更後"} ${(selected.status === "removed" ? snapshot.before.sha : snapshot.after.sha).slice(0, 7)}`;
-  for (const button of shadow.querySelectorAll<HTMLButtonElement>(
-    "[data-filename]",
-  )) {
-    if (button.dataset.filename === selected.filename)
-      button.setAttribute("aria-current", "page");
-    else button.removeAttribute("aria-current");
-  }
+    selected.status === "removed" ? "削除前 · 表示範囲" : "変更後 · 表示範囲";
 }
 function message(text: string, error = false): void {
   article.replaceChildren();
@@ -111,64 +100,42 @@ function message(text: string, error = false): void {
     retry.type = "button";
     retry.textContent = "再読み込み";
     retry.addEventListener("click", () => {
-      void load();
+      load(selected?.filename);
     });
-    const settings = document.createElement("button");
-    settings.type = "button";
-    settings.textContent = "拡張の設定";
-    settings.addEventListener("click", () => {
-      void request({ type: "open-options" });
-    });
-    actions.append(retry, settings);
+    actions.append(retry);
     box.append(actions);
   }
   article.append(box);
 }
-async function choose(file: ChangedFile): Promise<void> {
-  if (!snapshot) return;
-  const version = ++requestVersion;
-  selected = file;
-  contents = null;
+function choose(file: ChangedFile): void {
+  selected = files.find((item) => item.filename === file.filename) ?? null;
+  if (!selected) return;
   filesOpen(false);
   area.scrollTop = 0;
   if (matchMedia("(max-width:640px)").matches) fileToggle.focus();
-  message("Markdown全文を読み込んでいます…");
-  element(".file-path").textContent = file.filename;
-  element(".file-path").title = file.filename;
-  element(".version").textContent = "";
+  element(".file-path").textContent = selected.filename;
+  element(".file-path").title = selected.filename;
+  returnButton.disabled = false;
   for (const button of shadow.querySelectorAll<HTMLButtonElement>(
     "[data-filename]",
   )) {
-    if (button.dataset.filename === file.filename)
+    if (button.dataset.filename === selected.filename)
       button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   }
-  try {
-    const data =
-      cache.get(file.filename) ??
-      (await request<FileContents>({
-        type: "load-file",
-        snapshotId: snapshot.id,
-        filename: file.filename,
-      }));
-    if (version !== requestVersion || !dialog.open) return;
-    cache.set(file.filename, data);
-    contents = data;
-    render();
-  } catch (error) {
-    if (version === requestVersion)
-      message(
-        error instanceof Error ? error.message : "読み込みに失敗しました。",
-        true,
-      );
+  if (!selected.ranges.length) {
+    element(".version").textContent = "";
+    message(
+      "このファイルのソース差分はまだ読み込まれていません。元の差分を開き、ファイル・行を展開してから再読み込みしてください。",
+      true,
+    );
+    return;
   }
+  render();
 }
-async function load(preferred?: string): Promise<void> {
-  const version = ++requestVersion;
+function load(preferred?: string): void {
   selected = null;
-  contents = null;
-  snapshot = null;
-  cache.clear();
+  files = [];
   returnButton.disabled = true;
   fileFilter.disabled = true;
   fileFilter.value = "";
@@ -177,35 +144,31 @@ async function load(preferred?: string): Promise<void> {
   element(".file-path").textContent = "";
   element(".file-path").removeAttribute("title");
   element(".version").textContent = "";
-  element(".context").textContent = "";
-  message("PRの変更ファイルを読み込んでいます…");
+  const context = parsePullUrl(location.href);
+  element(".context").textContent = context
+    ? `${context.owner}/${context.repo} #${context.number}`
+    : "";
   try {
-    const data = await request<Snapshot>({ type: "load-pr" });
-    if (version !== requestVersion || !dialog.open) return;
-    snapshot = data;
-    element(".context").textContent =
-      `${data.context.owner}/${data.context.repo} #${data.context.number}`;
-    element(".file-count").textContent = String(data.files.length);
-    element(".tree-slot").replaceChildren(
-      createTree(data.files, (file) => {
-        void choose(file);
-      }),
-    );
-    if (!data.files.length) {
-      message("このPRには変更されたMarkdownファイルがありません。");
+    files = readDisplayedFiles();
+    element(".file-count").textContent = String(files.length);
+    element(".tree-slot").replaceChildren(createTree(files, choose));
+    if (!files.length) {
+      message(
+        /\/pull\/\d+\/(?:files|changes)(?:\/|$)/.test(location.pathname)
+          ? "この画面に読み込まれたMarkdownの差分はありません。ファイル一覧でMarkdownファイルを開いてください。"
+          : "PRの Files changed タブを開いて、Markdownの差分を表示してください。",
+      );
       return;
     }
-    returnButton.disabled = false;
     fileFilter.disabled = false;
-    await choose(
-      data.files.find((file) => file.filename === preferred) ?? data.files[0],
-    );
+    choose(files.find((file) => file.filename === preferred) ?? files[0]);
   } catch (error) {
-    if (version === requestVersion)
-      message(
-        error instanceof Error ? error.message : "読み込みに失敗しました。",
-        true,
-      );
+    message(
+      error instanceof Error
+        ? error.message
+        : "表示中の差分を読み取れませんでした。",
+      true,
+    );
   }
 }
 function maximize(): void {
@@ -226,7 +189,6 @@ function close(): void {
   dialog.close();
 }
 dialog.addEventListener("close", () => {
-  requestVersion++;
   document.documentElement.style.overflow = previousOverflow;
   if (dialog.classList.contains("maximized")) maximize();
   filesOpen(false);
@@ -253,23 +215,17 @@ diffButton.addEventListener("click", () => {
   render();
   area.scrollTop = scroll;
 });
+element(".refresh").addEventListener("click", () => load(selected?.filename));
 returnButton.addEventListener("click", () => {
-  const filename = selected?.filename;
+  const file = selected;
   close();
-  if (filename)
-    Array.from(
-      document.querySelectorAll<HTMLElement>(
-        "[data-path],[data-file-path],[data-tagsearch-path]",
-      ),
-    )
-      .find((node) =>
-        [
-          node.dataset.path,
-          node.dataset.filePath,
-          node.dataset.tagsearchPath,
-        ].includes(filename),
-      )
-      ?.scrollIntoView({ block: "start" });
+  if (!file) return;
+  const node =
+    document.getElementById(file.anchor) ??
+    (file.node.isConnected ? file.node : null);
+  if (node?.matches('[role="treeitem"]'))
+    node.querySelector<HTMLAnchorElement>('a[href^="#diff-"]')?.click();
+  else node?.scrollIntoView({ block: "start" });
 });
 function open(from: HTMLElement, preferred?: string): void {
   if (!parsePullUrl(location.href) || dialog.open) return;
@@ -278,7 +234,7 @@ function open(from: HTMLElement, preferred?: string): void {
   document.documentElement.style.overflow = "hidden";
   dialog.showModal();
   element<HTMLButtonElement>(".close").focus();
-  void load(preferred);
+  load(preferred);
 }
 launcher.addEventListener("click", () => open(launcher));
 function scan(): void {
@@ -290,28 +246,15 @@ function scan(): void {
   if (route && route !== next && dialog.open) close();
   route = next;
   if (!context) return;
-  for (const node of document.querySelectorAll<HTMLElement>(
-    ".file[data-path],[data-file-path],[data-tagsearch-path]",
-  )) {
-    const path =
-      node.dataset.path ?? node.dataset.filePath ?? node.dataset.tagsearchPath;
-    if (!path || !isMarkdown(path)) continue;
-    const header =
-      node.querySelector<HTMLElement>(
-        ".file-header,[data-testid='diff-file-header'],[data-testid='file-header']",
-      ) ??
-      (node.matches(
-        ".file-header,[data-testid='diff-file-header'],[data-testid='file-header']",
-      )
-        ? node
-        : null);
+  for (const file of readDisplayedFiles(document, false)) {
+    const header = file.header;
     if (!header || header.querySelector("[data-md-preview]")) continue;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "btn btn-sm";
     button.dataset.mdPreview = "";
     button.textContent = "Markdownプレビュー";
-    button.addEventListener("click", () => open(button, path));
+    button.addEventListener("click", () => open(button, file.filename));
     header.append(button);
   }
 }

@@ -13,7 +13,7 @@ export function escapeHtml(text: string): string {
   );
 }
 function markdownNodes(source: string): Node[] {
-  // Parse and sanitize the complete document so HTML containers spanning
+  // Parse and sanitize the complete input so HTML containers spanning
   // Markdown tokens (for example details/summary) stay structurally intact.
   const template = document.createElement("template");
   template.innerHTML = DOMPurify.sanitize(
@@ -278,8 +278,8 @@ export function blobUrl(revision: Revision, path: string): string {
 export function prepareDocument(
   container: HTMLElement,
   filename: string,
-  revisions: { before: Revision; after: Revision },
-  loadImage: (path: string, side: "before" | "after") => Promise<string>,
+  revisions: { before: Revision | null; after: Revision | null },
+  loadImage?: (path: string, side: "before" | "after") => Promise<string>,
   beforeFilename = filename,
 ): void {
   const slugCounts = new Map<string, number>();
@@ -343,7 +343,13 @@ export function prepareDocument(
         side === "before" ? beforeFilename : filename,
         href,
       );
-      const url = new URL(path ? blobUrl(revisions[side], path) : href);
+      const revision = revisions[side];
+      if (path && !revision) {
+        link.removeAttribute("href");
+        link.title = "元の差分でリンク先を確認してください。";
+        continue;
+      }
+      const url = new URL(path ? blobUrl(revision as Revision, path) : href);
       if (path) {
         const resolved = new URL(href, "https://repository.invalid/");
         url.search = resolved.search;
@@ -373,6 +379,10 @@ export function prepareDocument(
       );
       if (path) {
         image.removeAttribute("src");
+        if (!loadImage) {
+          image.alt = `${image.alt || path}（元の差分で画像を確認）`;
+          continue;
+        }
         void loadImage(path, side).then(
           (data) => {
             image.src = data;

@@ -54,3 +54,9 @@ zizmor --offline --persona pedantic .github
 GitHub Actionsでlint、型チェック、単体テスト、拡張ビルド、ブラウザテスト、npm audit、zizmorを実行します。npm auditでは開発用依存も含め、脆弱性が検出された場合にCIを失敗させます。ActionsはコミットSHAに固定し、read-only権限と `persist-credentials: false` を使用します。
 
 `npm install` / `npm update` は `.npmrc` の `min-release-age=7` により、公開から7日以上経過したバージョンに限定します。CIは `npm ci` より前に `npm run check:release-age` を実行し、lockfile内の直接・間接・開発用・optional依存をnpm registryの公開日と照合します。7日未満のバージョンや公開日を確認できない依存があれば失敗します。
+
+## 不具合の確認
+
+拡張を更新したあと、開いたままのPR画面も再読み込みしてください。以前の画面に残ったスクリプトは、拡張だけを更新しても入れ替わりません。
+
+Chromeの開発者ツールのConsoleで `[GH Markdown Viewer]` を絞り込むと、実行中のバージョン、起動・差分読取り・描画・再読み込みの処理段階、ファイル数・変更範囲数を確認できます。失敗時はエラー名・メッセージ・スタックも出力します。操作ログにはMarkdown本文や認証情報を渡さず、ログの外部送信や保存も行いません。

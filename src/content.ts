@@ -1,3 +1,4 @@
+import { logError, logEvent, logPrefix, viewerVersion } from "./diagnostics";
 import { parsePullUrl } from "./github";
 import { prepareDocument, renderMarkdown } from "./markdown";
 import { type DisplayedFile, readDisplayedFiles } from "./page";
@@ -5,7 +6,9 @@ import { createTree, filterTree, icon } from "./tree";
 import type { ChangedFile } from "./types";
 import css from "./viewer.css";
 
+logEvent("startup");
 const host = document.createElement("gh-md-viewer");
+host.dataset.version = viewerVersion;
 const shadow = host.attachShadow({ mode: "open" });
 const style = document.createElement("style");
 style.textContent = css;
@@ -39,51 +42,85 @@ let route = "";
 let opener: HTMLElement | null = null;
 let previousOverflow = "";
 
+function metrics(): Record<string, number | boolean> {
+  return {
+    files: files.length,
+    selectedIndex: selected ? files.indexOf(selected) : -1,
+    ranges: selected?.ranges.length ?? 0,
+    diff: diffEnabled,
+  };
+}
+function guarded(stage: string, action: () => void): void {
+  try {
+    action();
+  } catch (error) {
+    logError(stage, error, metrics());
+    element(".version").textContent = "";
+    message(
+      error instanceof Error
+        ? error.message
+        : "プレビューの処理に失敗しました。",
+      true,
+    );
+    const detail = document.createElement("p");
+    detail.className = "diagnostic-note";
+    detail.textContent = `v${viewerVersion} · 詳細はコンソールの ${logPrefix} ログを確認してください。拡張を更新した後はPR画面も再読み込みしてください。`;
+    article.querySelector(".message")?.append(detail);
+  }
+}
 function filesOpen(open: boolean): void {
   element(".layout").classList.toggle("files-open", open);
   fileToggle.setAttribute("aria-expanded", String(open));
 }
 function render(): void {
-  if (!selected?.ranges.length) return;
-  const rendered = document.createElement("div");
-  article.classList.toggle("with-diff", diffEnabled);
-  for (const range of selected.ranges) {
-    const section = document.createElement("section");
-    section.className = "preview-range";
-    const label = (start: number | null, end: number | null) =>
-      start === null
-        ? "なし"
-        : start === end
-          ? String(start)
-          : `${start}〜${end}`;
-    const rangeHead = document.createElement("header");
-    rangeHead.className = "range-head";
-    rangeHead.textContent = `変更前 ${label(range.beforeStart, range.beforeEnd)} 行 · 変更後 ${label(range.afterStart, range.afterEnd)} 行`;
-    const body = document.createElement("div");
-    body.innerHTML = renderMarkdown(
-      range.before,
-      range.after,
-      diffEnabled,
-      selected.status === "removed",
+  guarded("render", () => {
+    if (!selected?.ranges.length) return;
+    const started = performance.now();
+    logEvent("render:start", metrics());
+    const rendered = document.createElement("div");
+    article.classList.toggle("with-diff", diffEnabled);
+    for (const range of selected.ranges) {
+      const section = document.createElement("section");
+      section.className = "preview-range";
+      const label = (start: number | null, end: number | null) =>
+        start === null
+          ? "なし"
+          : start === end
+            ? String(start)
+            : `${start}〜${end}`;
+      const rangeHead = document.createElement("header");
+      rangeHead.className = "range-head";
+      rangeHead.textContent = `変更前 ${label(range.beforeStart, range.beforeEnd)} 行 · 変更後 ${label(range.afterStart, range.afterEnd)} 行`;
+      const body = document.createElement("div");
+      body.innerHTML = renderMarkdown(
+        range.before,
+        range.after,
+        diffEnabled,
+        selected.status === "removed",
+      );
+      if (!body.textContent && !body.querySelector("img,hr,input"))
+        body.textContent = "この範囲に表示する本文はありません。";
+      section.append(rangeHead, body);
+      rendered.append(section);
+    }
+    prepareDocument(
+      rendered,
+      selected.filename,
+      { before: selected.before, after: selected.after },
+      undefined,
+      selected.previous_filename ?? selected.filename,
     );
-    if (!body.textContent && !body.querySelector("img,hr,input"))
-      body.textContent = "この範囲に表示する本文はありません。";
-    section.append(rangeHead, body);
-    rendered.append(section);
-  }
-  prepareDocument(
-    rendered,
-    selected.filename,
-    { before: selected.before, after: selected.after },
-    undefined,
-    selected.previous_filename ?? selected.filename,
-  );
-  article.replaceChildren(...rendered.childNodes);
-  element(".notice").hidden = false;
-  element(".notice-text").textContent =
-    "GitHubで読み込まれている行のみを表示しています。省略された行は元の差分で展開し、再読み込みしてください。";
-  element(".version").textContent =
-    selected.status === "removed" ? "削除前 · 表示範囲" : "変更後 · 表示範囲";
+    article.replaceChildren(...rendered.childNodes);
+    element(".notice").hidden = false;
+    element(".notice-text").textContent =
+      "GitHubで読み込まれている行のみを表示しています。省略された行は元の差分で展開し、再読み込みしてください。";
+    element(".version").textContent =
+      selected.status === "removed" ? "削除前 · 表示範囲" : "変更後 · 表示範囲";
+    logEvent("render:complete", {
+      ...metrics(),
+      durationMs: Math.round(performance.now() - started),
+    });
+  });
 }
 function message(text: string, error = false): void {
   article.replaceChildren();
@@ -99,57 +136,67 @@ function message(text: string, error = false): void {
     const retry = document.createElement("button");
     retry.type = "button";
     retry.textContent = "再読み込み";
-    retry.addEventListener("click", () => {
-      load(selected?.filename);
-    });
+    retry.addEventListener("click", refresh);
     actions.append(retry);
     box.append(actions);
   }
   article.append(box);
 }
 function choose(file: ChangedFile): void {
-  selected = files.find((item) => item.filename === file.filename) ?? null;
-  if (!selected) return;
-  filesOpen(false);
-  area.scrollTop = 0;
-  if (matchMedia("(max-width:640px)").matches) fileToggle.focus();
-  element(".file-path").textContent = selected.filename;
-  element(".file-path").title = selected.filename;
-  returnButton.disabled = false;
-  for (const button of shadow.querySelectorAll<HTMLButtonElement>(
-    "[data-filename]",
-  )) {
-    if (button.dataset.filename === selected.filename)
-      button.setAttribute("aria-current", "page");
-    else button.removeAttribute("aria-current");
-  }
-  if (!selected.ranges.length) {
-    element(".version").textContent = "";
-    message(
-      "このファイルのソース差分はまだ読み込まれていません。元の差分を開き、ファイル・行を展開してから再読み込みしてください。",
-      true,
-    );
-    return;
-  }
-  render();
+  guarded("select", () => {
+    selected = files.find((item) => item.filename === file.filename) ?? null;
+    if (!selected) return;
+    logEvent("select", metrics());
+    filesOpen(false);
+    area.scrollTop = 0;
+    if (matchMedia("(max-width:640px)").matches) fileToggle.focus();
+    element(".file-path").textContent = selected.filename;
+    element(".file-path").title = selected.filename;
+    returnButton.disabled = false;
+    for (const button of shadow.querySelectorAll<HTMLButtonElement>(
+      "[data-filename]",
+    )) {
+      if (button.dataset.filename === selected.filename)
+        button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    }
+    if (!selected.ranges.length) {
+      element(".version").textContent = "";
+      message(
+        "このファイルのソース差分はまだ読み込まれていません。元の差分を開き、ファイル・行を展開してから再読み込みしてください。",
+        true,
+      );
+      return;
+    }
+    render();
+  });
 }
 function load(preferred?: string): void {
-  selected = null;
-  files = [];
-  returnButton.disabled = true;
-  fileFilter.disabled = true;
-  fileFilter.value = "";
-  element(".tree-slot").replaceChildren();
-  element(".file-count").textContent = "0";
-  element(".file-path").textContent = "";
-  element(".file-path").removeAttribute("title");
-  element(".version").textContent = "";
-  const context = parsePullUrl(location.href);
-  element(".context").textContent = context
-    ? `${context.owner}/${context.repo} #${context.number}`
-    : "";
-  try {
+  guarded("read", () => {
+    logEvent("read:start");
+    selected = null;
+    files = [];
+    returnButton.disabled = true;
+    fileFilter.disabled = true;
+    fileFilter.value = "";
+    element(".tree-slot").replaceChildren();
+    element(".file-count").textContent = "0";
+    element(".file-path").textContent = "";
+    element(".file-path").removeAttribute("title");
+    element(".version").textContent = "";
+    const context = parsePullUrl(location.href);
+    element(".context").textContent = context
+      ? `${context.owner}/${context.repo} #${context.number}`
+      : "";
     files = readDisplayedFiles();
+    logEvent("read:complete", {
+      files: files.length,
+      loadedFiles: files.filter((file) => file.ranges.length).length,
+      sourceTables: document.querySelectorAll(
+        'table[aria-label^="Diff for:"], .diff-table',
+      ).length,
+      treeItems: document.querySelectorAll('[role="treeitem"]').length,
+    });
     element(".file-count").textContent = String(files.length);
     element(".tree-slot").replaceChildren(createTree(files, choose));
     if (!files.length) {
@@ -162,14 +209,7 @@ function load(preferred?: string): void {
     }
     fileFilter.disabled = false;
     choose(files.find((file) => file.filename === preferred) ?? files[0]);
-  } catch (error) {
-    message(
-      error instanceof Error
-        ? error.message
-        : "表示中の差分を読み取れませんでした。",
-      true,
-    );
-  }
+  });
 }
 function maximize(): void {
   const scroll = area.scrollTop;
@@ -209,13 +249,18 @@ fileFilter.addEventListener("input", () => {
 });
 diffButton.addEventListener("click", () => {
   diffEnabled = !diffEnabled;
+  logEvent("diff", metrics());
   diffButton.setAttribute("aria-pressed", String(diffEnabled));
   element(".diff-label").textContent = `差分 ${diffEnabled ? "ON" : "OFF"}`;
   const scroll = area.scrollTop;
   render();
   area.scrollTop = scroll;
 });
-element(".refresh").addEventListener("click", () => load(selected?.filename));
+function refresh(): void {
+  logEvent("refresh", metrics());
+  load(selected?.filename);
+}
+element(".refresh").addEventListener("click", refresh);
 returnButton.addEventListener("click", () => {
   const file = selected;
   close();
@@ -228,35 +273,40 @@ returnButton.addEventListener("click", () => {
   else node?.scrollIntoView({ block: "start" });
 });
 function open(from: HTMLElement, preferred?: string): void {
-  if (!parsePullUrl(location.href) || dialog.open) return;
-  opener = from;
-  previousOverflow = document.documentElement.style.overflow;
-  document.documentElement.style.overflow = "hidden";
-  dialog.showModal();
-  element<HTMLButtonElement>(".close").focus();
-  load(preferred);
+  guarded("open", () => {
+    if (!parsePullUrl(location.href) || dialog.open) return;
+    logEvent("open");
+    opener = from;
+    previousOverflow = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    dialog.showModal();
+    element<HTMLButtonElement>(".close").focus();
+    load(preferred);
+  });
 }
 launcher.addEventListener("click", () => open(launcher));
 function scan(): void {
-  const context = parsePullUrl(location.href);
-  launcher.hidden = !context;
-  const next = context
-    ? `${context.owner}/${context.repo}/${context.number}`
-    : "";
-  if (route && route !== next && dialog.open) close();
-  route = next;
-  if (!context) return;
-  for (const file of readDisplayedFiles(document, false)) {
-    const header = file.header;
-    if (!header || header.querySelector("[data-md-preview]")) continue;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "btn btn-sm";
-    button.dataset.mdPreview = "";
-    button.textContent = "Markdownプレビュー";
-    button.addEventListener("click", () => open(button, file.filename));
-    header.append(button);
-  }
+  guarded("scan", () => {
+    const context = parsePullUrl(location.href);
+    launcher.hidden = !context;
+    const next = context
+      ? `${context.owner}/${context.repo}/${context.number}`
+      : "";
+    if (route && route !== next && dialog.open) close();
+    route = next;
+    if (!context) return;
+    for (const file of readDisplayedFiles(document, false)) {
+      const header = file.header;
+      if (!header || header.querySelector("[data-md-preview]")) continue;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn btn-sm";
+      button.dataset.mdPreview = "";
+      button.textContent = "Markdownプレビュー";
+      button.addEventListener("click", () => open(button, file.filename));
+      header.append(button);
+    }
+  });
 }
 let scanTimer: ReturnType<typeof setTimeout> | undefined;
 const observer = new MutationObserver(() => {

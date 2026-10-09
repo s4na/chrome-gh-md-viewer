@@ -11,7 +11,8 @@ declare module "@primer/octicons" {
     | "x"
     | "sidebar-collapse"
     | "sidebar-expand"
-    | "markdown";
+    | "markdown"
+    | "search";
   const icons: Record<
     IconName,
     { toSVG(options?: Record<string, string | number>): string }

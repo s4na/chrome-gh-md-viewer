@@ -82,6 +82,9 @@ test("extension entry, API loader, rendered diff, tree, maximize and focus", asy
     await expect(modal.locator(".document h1").first()).toHaveText(
       "再試行の設計",
     );
+    await expect(modal.locator(".change")).toHaveCount(0);
+    await expect(modal.locator(".document")).toContainText("最大3回");
+    await modal.getByRole("button", { name: "差分表示", exact: true }).click();
     await expect(modal.locator(".change.added")).not.toHaveCount(0);
     await expect(modal.locator(".change.removed")).not.toHaveCount(0);
     await modal.getByRole("button", { name: "差分表示", exact: true }).click();
@@ -89,6 +92,26 @@ test("extension entry, API loader, rendered diff, tree, maximize and focus", asy
     await expect(modal.locator(".document")).toContainText("最大3回");
     await expect(modal.locator(".document")).not.toContainText("最大5回");
     await modal.locator('[data-path="docs/guides"] > summary').click();
+    const filter = modal.getByRole("searchbox", {
+      name: "ファイルを絞り込む",
+      exact: true,
+    });
+    await filter.fill("setup");
+    await expect(
+      modal.getByRole("button", {
+        name: "docs/guides/setup.md、追加",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      modal.getByRole("button", { name: "docs/legacy.md、削除", exact: true }),
+    ).not.toBeVisible();
+    await filter.fill("missing-file");
+    await expect(modal.locator(".tree-empty")).toBeVisible();
+    await filter.fill("");
+    await expect(
+      modal.locator('[data-path="docs/guides"]'),
+    ).not.toHaveAttribute("open");
     await modal.locator(".document-area").evaluate((element) => {
       element.scrollTop = 120;
     });
@@ -122,6 +145,27 @@ test("extension entry, API loader, rendered diff, tree, maximize and focus", asy
       .getByRole("button", { name: "docs/legacy.md、削除", exact: true })
       .click();
     await expect(modal.locator(".notice")).toBeVisible();
+    await page.setViewportSize({ width: 375, height: 812 });
+    await modal
+      .getByRole("button", { name: "ファイル一覧", exact: true })
+      .click();
+    await expect(filter).toBeVisible();
+    await filter.fill("setup");
+    await modal
+      .getByRole("button", { name: "docs/guides/setup.md、追加", exact: true })
+      .click();
+    await expect(modal.locator(".document h1")).toHaveText("開発環境");
+    await expect(filter).not.toBeVisible();
+    const maxBox = await modal
+      .getByRole("button", { name: "最大化", exact: true })
+      .boundingBox();
+    const closeBox = await modal
+      .getByRole("button", { name: "プレビューを閉じる", exact: true })
+      .boundingBox();
+    expect(maxBox && closeBox && maxBox.x + maxBox.width <= closeBox.x).toBe(
+      true,
+    );
+    expect(closeBox && closeBox.x + closeBox.width <= 375).toBe(true);
     await page.keyboard.press("Escape");
     await expect(modal).not.toBeVisible();
     await expect(page.locator(".file-header button")).toBeFocused();

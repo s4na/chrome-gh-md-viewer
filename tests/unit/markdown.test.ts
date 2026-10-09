@@ -59,7 +59,100 @@ describe("rendered Markdown", () => {
     const diff = renderMarkdown(before, after, true);
     expect(diff).toContain('class="change removed"');
     expect(diff).toContain('class="change added"');
-    expect(diff).toContain("最大5回");
+    const container = document.createElement("div");
+    container.innerHTML = diff;
+    expect(container.querySelector("del")?.textContent).toBe("5");
+    expect(container.querySelector("ins")?.textContent).toBe("3");
+    expect(container.querySelectorAll("p")).toHaveLength(1);
+    expect(container.querySelector("p")?.className).toBe("");
+    expect(container.querySelector("table .change")).toBeNull();
+  });
+  it("keeps formatting and highlights only changed words inside a paragraph", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderMarkdown(
+      "# Retry\n\nRetry **five** times and keep reading.",
+      "# Retry\n\nRetry **three** times and keep reading.",
+      true,
+    );
+    expect(container.querySelectorAll("h1")).toHaveLength(1);
+    expect(container.querySelectorAll("p")).toHaveLength(1);
+    expect(container.querySelector("strong del")?.textContent).toBe("five");
+    expect(container.querySelector("strong ins")?.textContent).toBe("three");
+    expect(container.querySelectorAll(".change")).toHaveLength(2);
+    expect(container.querySelector(".change-mark")).toBeNull();
+  });
+  it("preserves unchanged list items and table cells", () => {
+    const source =
+      "- Keep this\n- Wait 5 seconds\n- Finish\n\n| Key | Value |\n| --- | --- |\n| Retry | 5 |\n| Delay | 1 |";
+    const container = document.createElement("div");
+    container.innerHTML = renderMarkdown(
+      source,
+      source.replaceAll("5", "3"),
+      true,
+    );
+    expect(container.querySelectorAll("ul")).toHaveLength(1);
+    expect(container.querySelectorAll("li")).toHaveLength(3);
+    expect(container.querySelectorAll("table")).toHaveLength(1);
+    expect(container.querySelectorAll("td")).toHaveLength(4);
+    expect(
+      Array.from(container.querySelectorAll("del"), (node) => node.textContent),
+    ).toEqual(["5", "5"]);
+    expect(
+      Array.from(container.querySelectorAll("ins"), (node) => node.textContent),
+    ).toEqual(["3", "3"]);
+    expect(
+      container.querySelector("li .change")?.parentElement?.textContent,
+    ).toBe("Wait 53 seconds");
+    expect(container.querySelector("ul")?.className).toBe("");
+    expect(container.querySelector("table")?.className).toBe("");
+  });
+  it("preserves both code versions including indentation and escaped HTML", () => {
+    const before = "```html\n<div>\n  old & safe\n</div>\n```";
+    const after = "```html\n<div>\n    new & safe\n</div>\n```";
+    const container = document.createElement("div");
+    container.innerHTML = renderMarkdown(before, after, true);
+    expect(container.querySelectorAll("pre")).toHaveLength(1);
+    expect(container.querySelector("code div")).toBeNull();
+    for (const [side, source] of [
+      ["added", before],
+      ["removed", after],
+    ]) {
+      const projected = container.cloneNode(true) as HTMLElement;
+      for (const node of projected.querySelectorAll(`.change.${side}`))
+        node.remove();
+      const plain = document.createElement("div");
+      plain.innerHTML = renderMarkdown("", source, false);
+      expect(projected.querySelector("code")?.textContent).toBe(
+        plain.querySelector("code")?.textContent,
+      );
+    }
+  });
+  it("marks inserted and deleted blocks without duplicating unchanged siblings", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderMarkdown(
+      "# Heading\n\n- Keep\n- Remove\n\nOld paragraph",
+      "# Heading\n\n- Keep\n- Add\n\nNew paragraph\n\n## New section",
+      true,
+    );
+    expect(container.querySelectorAll("h1")).toHaveLength(1);
+    expect(container.querySelectorAll("ul")).toHaveLength(1);
+    expect(container.querySelectorAll("p")).toHaveLength(1);
+    expect(container.querySelector("h2.change.added")?.textContent).toBe(
+      "New section",
+    );
+    expect(container.querySelector("li")?.textContent).toBe("Keep");
+    expect(container.querySelector("li")?.querySelector(".change")).toBeNull();
+  });
+  it("keeps nested HTML containers and ignores changed comments", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderMarkdown(
+      "<details>\n<summary>Summary</summary>\n\nWait 5 seconds\n\n<!-- old secret -->\n</details>",
+      "<details>\n<summary>Summary</summary>\n\nWait 3 seconds\n\n<!-- new secret -->\n</details>",
+      true,
+    );
+    expect(container.querySelectorAll("details")).toHaveLength(1);
+    expect(container.querySelector("details p del")?.textContent).toBe("5");
+    expect(container.textContent).not.toContain("secret");
   });
   it("marks a changed reference link destination", () => {
     const diff = renderMarkdown(
@@ -70,6 +163,30 @@ describe("rendered Markdown", () => {
     expect(diff).toContain('href="./old.md"');
     expect(diff).toContain('href="./new.md"');
     expect(diff).toContain('class="change removed"');
+  });
+  it("links both revisions to an inline-edited heading", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderMarkdown(
+      "[Section](#old-heading)\n\n# Old heading",
+      "[Section](#new-heading)\n\n# New heading",
+      true,
+    );
+    const revision = { owner: "owner", repo: "repo", sha: "a".repeat(40) };
+    prepareDocument(
+      container,
+      "readme.md",
+      { before: revision, after: revision },
+      async () => "",
+    );
+    const heading = container.querySelector("h1");
+    expect(heading?.id).toBe("new-heading");
+    let scrolls = 0;
+    if (heading)
+      heading.scrollIntoView = () => {
+        scrolls++;
+      };
+    for (const link of container.querySelectorAll("a")) link.click();
+    expect(scrolls).toBe(2);
   });
   it("sanitizes executable HTML and keeps code examples as code", () => {
     const html = renderMarkdown(

@@ -12,7 +12,7 @@ export function escapeHtml(text: string): string {
       ] ?? char,
   );
 }
-function markdownBlocks(source: string): { html: string }[] {
+function markdownNodes(source: string): Node[] {
   // Parse and sanitize the complete document so HTML containers spanning
   // Markdown tokens (for example details/summary) stay structurally intact.
   const template = document.createElement("template");
@@ -35,18 +35,128 @@ function markdownBlocks(source: string): { html: string }[] {
       FORBID_ATTR: ["style", "id", "name"],
     },
   );
-  return Array.from(template.content.childNodes)
-    .filter(
-      (node) =>
-        node.nodeType === Node.ELEMENT_NODE ||
-        (node.nodeType === Node.TEXT_NODE && node.textContent?.trim()),
-    )
-    .map((node) => ({
-      html:
-        node instanceof Element
-          ? node.outerHTML
-          : escapeHtml(node.textContent ?? ""),
-    }));
+  return Array.from(template.content.childNodes).filter(
+    (node) =>
+      node.nodeType === Node.ELEMENT_NODE ||
+      (node.nodeType === Node.TEXT_NODE && node.textContent?.trim()),
+  );
+}
+
+function nodeHtml(node: Node): string {
+  return node instanceof Element
+    ? node.outerHTML
+    : escapeHtml(node.textContent ?? "");
+}
+
+function markNode(node: Node, added: boolean): string {
+  const side = added ? "after" : "before";
+  const kind = added ? "added" : "removed";
+  if (node instanceof Element) {
+    const marked = node.cloneNode(true) as Element;
+    marked.classList.add("change", kind);
+    marked.setAttribute("data-revision", side);
+    return marked.outerHTML;
+  }
+  const tag = added ? "ins" : "del";
+  return `<${tag} class="change ${kind}" data-revision="${side}">${nodeHtml(node)}</${tag}>`;
+}
+
+function compatibleNodes(before: Node, after: Node): boolean {
+  return (
+    (before.nodeType === after.nodeType &&
+      before.cloneNode(false).isEqualNode(after.cloneNode(false))) ||
+    (before.nodeType === Node.TEXT_NODE && after.nodeType === Node.TEXT_NODE)
+  );
+}
+
+const segmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+function diffNode(before: Node, after: Node, deadline: number): string {
+  if (before.isEqualNode(after)) return nodeHtml(after);
+  if (before instanceof Element && after instanceof Element) {
+    const result = after.cloneNode(false) as Element;
+    result.innerHTML = diffNodes(
+      Array.from(before.childNodes),
+      Array.from(after.childNodes),
+      deadline,
+    );
+    return result.outerHTML;
+  }
+  const tokenize = (node: Node) =>
+    Array.from(
+      segmenter.segment(node.textContent ?? ""),
+      (part) => part.segment,
+    );
+  const changes = diffArrays(tokenize(before), tokenize(after), {
+    timeout: Math.max(1, deadline - performance.now()),
+  });
+  if (!changes) return markNode(before, false) + markNode(after, true);
+  return changes
+    .map((part) => {
+      const text = part.value.join("");
+      return part.added || part.removed
+        ? markNode(document.createTextNode(text), !!part.added)
+        : escapeHtml(text);
+    })
+    .join("");
+}
+
+function diffNodes(before: Node[], after: Node[], deadline: number): string {
+  const visibleNode = (node: Node) =>
+    node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE;
+  before = before.filter(visibleNode);
+  after = after.filter(visibleNode);
+  const changes = diffArrays(before, after, {
+    comparator: (a, b) => a.isEqualNode(b),
+    timeout: Math.max(1, deadline - performance.now()),
+  });
+  if (!changes)
+    return (
+      before.map((node) => markNode(node, false)).join("") +
+      after.map((node) => markNode(node, true)).join("")
+    );
+  let result = "";
+  for (let index = 0; index < changes.length; index++) {
+    const part = changes[index];
+    const next = changes[index + 1];
+    if (part.removed && next?.added) {
+      // Keep identical descendants as anchors, then align compatible changed nodes.
+      const pairs = diffArrays(part.value, next.value, {
+        comparator: compatibleNodes,
+        timeout: Math.max(1, deadline - performance.now()),
+      });
+      if (pairs) {
+        let oldIndex = 0;
+        let newIndex = 0;
+        for (const pair of pairs) {
+          for (const node of pair.value) {
+            if (pair.removed) {
+              result += markNode(node, false);
+              oldIndex++;
+            } else if (pair.added) {
+              result += markNode(node, true);
+              newIndex++;
+            } else {
+              result += diffNode(
+                part.value[oldIndex++],
+                next.value[newIndex++],
+                deadline,
+              );
+            }
+          }
+        }
+        index++;
+        continue;
+      }
+    }
+    result += part.value
+      .map((node) =>
+        part.added || part.removed
+          ? markNode(node, !!part.added)
+          : nodeHtml(node),
+      )
+      .join("");
+  }
+  return result;
 }
 export function renderMarkdown(
   before: string,
@@ -54,36 +164,16 @@ export function renderMarkdown(
   diff: boolean,
   removed = false,
 ): string {
-  const oldBlocks = markdownBlocks(before);
-  const newBlocks = markdownBlocks(after);
+  const oldBlocks = markdownNodes(before);
+  const newBlocks = markdownNodes(after);
   if (!diff)
     return (removed ? oldBlocks : newBlocks)
       .map(
         (block) =>
-          `<div data-revision="${removed ? "before" : "after"}">${block.html}</div>`,
+          `<div data-revision="${removed ? "before" : "after"}">${nodeHtml(block)}</div>`,
       )
       .join("");
-  const changes = diffArrays(oldBlocks, newBlocks, {
-    comparator: (a, b) => a.html === b.html,
-    timeout: 1000,
-  }) ?? [
-    { removed: true, added: false, value: oldBlocks },
-    { removed: false, added: true, value: newBlocks },
-  ];
-  return changes
-    .map((part) => {
-      const kind = part.added ? "added" : part.removed ? "removed" : "";
-      const side = part.removed ? "before" : "after";
-      return part.value
-        .map((block) => {
-          const body = block.html;
-          return kind
-            ? `<section class="change ${kind}" data-revision="${side}"><span class="change-mark" aria-label="${part.added ? "追加" : "削除"}">${part.added ? "+" : "−"}</span><div>${body}</div></section>`
-            : `<div data-revision="${side}">${body}</div>`;
-        })
-        .join("");
-    })
-    .join("");
+  return `<div data-revision="after">${diffNodes(oldBlocks, newBlocks, performance.now() + 1000)}</div>`;
 }
 export function relativePath(filename: string, href: string): string | null {
   if (
@@ -110,19 +200,31 @@ export function prepareDocument(
   beforeFilename = filename,
 ): void {
   const slugCounts = new Map<string, number>();
+  const headingTargets = new Map<string, HTMLElement>();
   for (const heading of container.querySelectorAll<HTMLElement>(
     "h1,h2,h3,h4,h5,h6",
   )) {
-    const slug = (heading.textContent ?? "")
-      .toLowerCase()
-      .trim()
-      .replace(/[^\p{L}\p{N}\p{M}_\-\s]/gu, "")
-      .replace(/\s/g, "-");
-    const prefix = heading.closest('[data-revision="before"]') ? "before-" : "";
-    const key = prefix + slug;
-    const count = slugCounts.get(key) ?? 0;
-    heading.id = key + (count ? `-${count}` : "");
-    slugCounts.set(key, count + 1);
+    const ownSide = heading.closest('[data-revision="before"]')
+      ? "before"
+      : "after";
+    for (const side of ["before", "after"] as const) {
+      const excluded = side === "before" ? "added" : "removed";
+      if (heading.closest(`.change.${excluded}`)) continue;
+      const projected = heading.cloneNode(true) as HTMLElement;
+      for (const node of projected.querySelectorAll(`.change.${excluded}`))
+        node.remove();
+      const slug = (projected.textContent ?? "")
+        .toLowerCase()
+        .trim()
+        .replace(/[^\p{L}\p{N}\p{M}_\-\s]/gu, "")
+        .replace(/\s/g, "-");
+      const key = (side === "before" ? "before-" : "") + slug;
+      const count = slugCounts.get(key) ?? 0;
+      const id = key + (count ? `-${count}` : "");
+      headingTargets.set(id, heading);
+      if (side === ownSide) heading.id = id;
+      slugCounts.set(key, count + 1);
+    }
   }
   for (const input of container.querySelectorAll<HTMLInputElement>("input")) {
     if (input.type === "checkbox") input.disabled = true;
@@ -141,8 +243,10 @@ export function prepareDocument(
           );
           const heading =
             (side === "before"
-              ? headings.find((node) => node.id === `before-${target}`)
-              : null) ?? headings.find((node) => node.id === target);
+              ? headingTargets.get(`before-${target}`)
+              : null) ??
+            headingTargets.get(target) ??
+            headings.find((node) => node.id === target);
           heading?.scrollIntoView({ block: "start" });
         } catch {
           /* Invalid anchor remains inert. */

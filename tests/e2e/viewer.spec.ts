@@ -3,18 +3,56 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium, expect, test } from "@playwright/test";
 
-const oldSha = "a".repeat(40);
-const headSha = "b".repeat(40);
-const mergeSha = "c".repeat(40);
-const before =
-  "# 再試行の設計\n\n最大5回まで再試行します。\n\n## 待機時間\n\n| 回数 | 秒 |\n| --- | --- |\n| 1 | 1 |\n\n```yaml\nretry: 5\n```\n";
-const after =
-  before.replaceAll("5", "3") +
-  Array.from(
-    { length: 20 },
-    () => "\n日本語の文書を自然に読めることを確認します。\n",
-  ).join("");
-test("extension entry, API loader, rendered diff, tree, maximize and focus", async () => {
+import { diffFile } from "../fixtures/diff";
+
+const pageDiff =
+  diffFile(
+    "docs/design/retry.md",
+    [
+      { kind: "hunk", text: "@@ -1,10 +1,10 @@" },
+      { kind: "context", before: 1, after: 1, text: "# 再試行の設計" },
+      { kind: "context", before: 2, after: 2, text: "" },
+      { kind: "removed", before: 3, text: "最大5回まで再試行します。" },
+      { kind: "added", after: 3, text: "最大3回まで再試行します。" },
+      { kind: "context", before: 4, after: 4, text: "" },
+      { kind: "context", before: 5, after: 5, text: "| 回数 | 秒 |" },
+      { kind: "context", before: 6, after: 6, text: "| --- | --- |" },
+      { kind: "context", before: 7, after: 7, text: "| 1 | 1 |" },
+      { kind: "context", before: 8, after: 8, text: "" },
+      { kind: "context", before: 9, after: 9, text: "```yaml" },
+      { kind: "removed", before: 10, text: "retry: 5" },
+      { kind: "added", after: 10, text: "retry: 3" },
+      { kind: "context", before: 11, after: 11, text: "```" },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        kind: "context" as const,
+        before: 12 + index,
+        after: 12 + index,
+        text: index % 2 ? "" : "日本語の文書を自然に読めることを確認します。",
+      })),
+    ],
+    "diff-retry",
+  ) +
+  diffFile(
+    "docs/guides/setup.md",
+    [
+      { kind: "hunk", text: "@@ -0,0 +1,3 @@" },
+      { kind: "added", after: 1, text: "# 開発環境" },
+      { kind: "added", after: 2, text: "" },
+      { kind: "added", after: 3, text: "起動手順です。" },
+    ],
+    "diff-setup",
+  ) +
+  diffFile(
+    "docs/legacy.md",
+    [
+      { kind: "hunk", text: "@@ -1,3 +0,0 @@" },
+      { kind: "removed", before: 1, text: "# 旧設計" },
+      { kind: "removed", before: 2, text: "" },
+      { kind: "removed", before: 3, text: "削除した手順です。" },
+    ],
+    "diff-legacy",
+  );
+test("extension reads displayed source only, with diff, tree, maximize and focus", async () => {
   const profile = await mkdtemp(path.join(tmpdir(), "gh-md-viewer-"));
   const extension = path.resolve("dist");
   const context = await chromium.launchPersistentContext(profile, {
@@ -27,57 +65,24 @@ test("extension entry, API loader, rendered diff, tree, maximize and focus", asy
   });
   try {
     const calls: string[] = [];
-    await context.route("https://api.github.com/**", async (route) => {
-      const url = new URL(route.request().url());
-      calls.push(url.href);
-      if (url.pathname.endsWith(`/compare/${oldSha}...${headSha}`))
-        return route.fulfill({
-          json: { merge_base_commit: { sha: mergeSha } },
-        });
-      if (url.pathname.endsWith("/pulls/42/files"))
-        return route.fulfill({
-          json: [
-            { filename: "docs/design/retry.md", status: "modified" },
-            { filename: "docs/guides/setup.md", status: "added" },
-            { filename: "docs/legacy.md", status: "removed" },
-          ],
-        });
-      if (url.pathname.endsWith("/pulls/42"))
-        return route.fulfill({
-          json: {
-            head: {
-              sha: headSha,
-              repo: { name: "fork", owner: { login: "contributor" } },
-            },
-            base: {
-              sha: oldSha,
-              repo: { name: "repo", owner: { login: "owner" } },
-            },
-            changed_files: 3,
-          },
-        });
-      if (url.pathname.includes("/contents/"))
-        return route.fulfill({
-          contentType: "text/plain",
-          body: url.pathname.endsWith("setup.md")
-            ? "# 開発環境\n\n起動手順です。"
-            : url.searchParams.get("ref") === headSha
-              ? after
-              : before,
-        });
-      return route.fulfill({ status: 404 });
+    context.on("request", (request) => {
+      if (request.url().startsWith("https://api.github.com/"))
+        calls.push(request.url());
     });
+    await context.route("https://api.github.com/**", (route) =>
+      route.fulfill({ status: 404 }),
+    );
     await context.route(
       "https://github.com/owner/repo/pull/42/files",
       (route) =>
         route.fulfill({
-          contentType: "text/html",
-          body: '<html lang="ja"><body><h1>Pull request</h1><div class="file" data-path="docs/design/retry.md"><header class="file-header">docs/design/retry.md</header><pre>+ # 再試行の設計</pre></div></body></html>',
+          contentType: "text/html; charset=utf-8",
+          body: `<html lang="ja"><body><h1>Private PR</h1>${pageDiff}</body></html>`,
         }),
     );
     const page = await context.newPage();
     await page.goto("https://github.com/owner/repo/pull/42/files");
-    await page.locator(".file-header button").click();
+    await page.locator("#diff-retry header button").click();
     const modal = page.getByRole("dialog");
     await expect(modal.locator(".document h1").first()).toHaveText(
       "再試行の設計",
@@ -180,26 +185,14 @@ test("extension entry, API loader, rendered diff, tree, maximize and focus", asy
     expect(closeBox && closeBox.x + closeBox.width <= 375).toBe(true);
     await page.keyboard.press("Escape");
     await expect(modal).not.toBeVisible();
-    await expect(page.locator(".file-header button")).toBeFocused();
-    expect(
-      calls.some(
-        (url) =>
-          url.includes("/repos/contributor/fork/contents/") &&
-          url.includes(headSha),
-      ),
-    ).toBe(true);
-    expect(
-      calls.some(
-        (url) =>
-          url.includes("/repos/owner/repo/contents/") && url.includes(mergeSha),
-      ),
-    ).toBe(true);
+    await expect(page.locator("#diff-retry header button")).toBeFocused();
+    expect(calls).toEqual([]);
   } finally {
     await context.close();
     await rm(profile, { recursive: true, force: true });
   }
 });
-test("authentication failure offers retry/settings", async () => {
+test("empty or unloaded source never asks for authentication and can be re-read", async () => {
   const profile = await mkdtemp(path.join(tmpdir(), "gh-md-viewer-"));
   const extension = path.resolve("dist");
   const context = await chromium.launchPersistentContext(profile, {
@@ -211,29 +204,81 @@ test("authentication failure offers retry/settings", async () => {
     ],
   });
   try {
+    const calls: string[] = [];
+    context.on("request", (request) => {
+      if (request.url().startsWith("https://api.github.com/"))
+        calls.push(request.url());
+    });
     await context.route("https://api.github.com/**", (route) =>
-      route.fulfill({ status: 401, body: "Unauthorized" }),
+      route.fulfill({ status: 404 }),
     );
     await context.route(
-      "https://github.com/owner/repo/pull/42/files",
+      "https://github.com/owner/repo/pull/42/changes",
       (route) =>
         route.fulfill({
-          contentType: "text/html",
-          body: "<html><body>PR</body></html>",
+          contentType: "text/html; charset=utf-8",
+          body: '<html><body><h1>Private PR</h1><div role="tree"><div role="treeitem" id="docs/not-loaded.md"><a href="#diff-not-loaded">not-loaded.md</a></div></div></body></html>',
         }),
     );
     const page = await context.newPage();
-    await page.goto("https://github.com/owner/repo/pull/42/files");
+    await page.goto("https://github.com/owner/repo/pull/42/changes");
     await page
       .getByRole("button", { name: "Markdownプレビュー", exact: true })
       .click();
-    await expect(page.getByRole("alert")).toContainText("トークン");
-    await expect(
-      page.getByRole("button", { name: "再読み込み" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "拡張の設定" }),
-    ).toBeVisible();
+    const modal = page.getByRole("dialog");
+    await expect(modal.getByRole("alert")).toContainText(
+      "まだ読み込まれていません",
+    );
+    await expect(modal.getByRole("button", { name: "拡張の設定" })).toHaveCount(
+      0,
+    );
+    await page.evaluate(
+      (html) => {
+        const box = document.createElement("div");
+        box.innerHTML = html;
+        document.body.append(box);
+      },
+      diffFile(
+        "docs/not-loaded.md",
+        [
+          { kind: "context", before: 20, after: 20, text: "# 読み込んだ範囲" },
+          { kind: "context", before: 21, after: 21, text: "" },
+          { kind: "removed", before: 22, text: "5回" },
+          { kind: "added", after: 22, text: "3回" },
+          { kind: "context", before: 40, after: 40, text: "# 別の範囲" },
+        ],
+        "diff-not-loaded",
+      ),
+    );
+    await modal
+      .getByRole("button", { name: "再読み込み", exact: true })
+      .click();
+    await expect(modal.locator(".document h1")).toHaveCount(2);
+    await expect(modal.locator(".preview-range")).toHaveCount(2);
+    await expect(modal.locator(".range-head").first()).toContainText("20〜22");
+    await expect(modal.locator(".notice")).toContainText(
+      "読み込まれている行のみ",
+    );
+    await modal.getByRole("button", { name: "差分表示", exact: true }).click();
+    await expect(modal.locator("del")).toHaveText("5");
+    await expect(modal.locator("ins")).toHaveText("3");
+    await modal
+      .getByRole("button", { name: "このファイルの差分へ戻る", exact: true })
+      .click();
+    await expect(modal).not.toBeVisible();
+    await page.evaluate(() => {
+      for (const node of document.querySelectorAll(
+        '[role="region"], [role="tree"]',
+      ))
+        node.remove();
+    });
+    await page
+      .getByRole("button", { name: "Markdownプレビュー", exact: true })
+      .click();
+    await expect(modal.locator(".message")).toContainText(
+      "Markdownの差分はありません",
+    );
+    expect(calls).toEqual([]);
   } finally {
     await context.close();
     await rm(profile, { recursive: true, force: true });

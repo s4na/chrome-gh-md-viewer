@@ -534,6 +534,29 @@ img.change.removed {
   border-radius: 6px;
   background: var(--panel);
 }
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 12px;
+}
+.notice .refresh {
+  flex-shrink: 0;
+}
+.range-head {
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+  margin-bottom: 16px;
+}
+.preview-range + .preview-range {
+  margin-top: 32px;
+}
+.preview-range > div > div:first-child > :first-child {
+  margin-top: 0;
+}
 .message[role="alert"] {
   color: var(--fg);
 }

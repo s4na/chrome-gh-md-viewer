@@ -5,7 +5,7 @@ await rm("dist", { recursive: true, force: true });
 await mkdir("dist", { recursive: true });
 await cp("extension", "dist", { recursive: true });
 await build({
-  entryPoints: ["src/content.ts", "src/background.ts", "src/options.ts"],
+  entryPoints: ["src/content.ts"],
   bundle: true,
   outdir: "dist",
   format: "iife",

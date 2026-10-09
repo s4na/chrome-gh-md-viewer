@@ -100,9 +100,113 @@ function diffNode(before: Node, after: Node, deadline: number): string {
     .join("");
 }
 
+function alignChangedNodes(
+  before: Node[],
+  after: Node[],
+  deadline: number,
+): string | null {
+  if (before.length * after.length > 10000) return null;
+  const tokens = (node: Node) => {
+    const counts = new Map<string, number>();
+    let size = 0;
+    for (const { segment } of segmenter.segment(node.textContent ?? "")) {
+      if (!segment.trim()) continue;
+      counts.set(segment, (counts.get(segment) ?? 0) + 1);
+      size++;
+    }
+    return { counts, size };
+  };
+  const oldTokens = before.map(tokens);
+  const newTokens = after.map(tokens);
+  const width = after.length + 1;
+  const costs = new Float64Array((before.length + 1) * width);
+  const steps = new Uint8Array(costs.length);
+  for (let i = 1; i <= before.length; i++) {
+    costs[i * width] = i;
+    steps[i * width] = 1;
+  }
+  for (let j = 1; j <= after.length; j++) {
+    costs[j] = j;
+    steps[j] = 2;
+  }
+  for (let i = 1; i <= before.length; i++) {
+    for (let j = 1; j <= after.length; j++) {
+      if (performance.now() >= deadline) return null;
+      let replace = Number.POSITIVE_INFINITY;
+      if (compatibleNodes(before[i - 1], after[j - 1])) {
+        const old = oldTokens[i - 1];
+        const next = newTokens[j - 1];
+        let common = 0;
+        for (const [token, count] of old.counts)
+          common += Math.min(count, next.counts.get(token) ?? 0);
+        const size = Math.max(old.size, next.size);
+        const similarity = size ? common / size : 1;
+        replace = costs[(i - 1) * width + j - 1] + 2 * (1 - similarity);
+      }
+      const remove = costs[(i - 1) * width + j] + 1;
+      const add = costs[i * width + j - 1] + 1;
+      const index = i * width + j;
+      costs[index] = Math.min(replace, remove, add);
+      steps[index] =
+        replace <= remove && replace <= add ? 0 : remove < add ? 1 : 2;
+    }
+  }
+  const pairs: { before?: Node; after?: Node }[] = [];
+  let i = before.length;
+  let j = after.length;
+  while (i || j) {
+    const step = steps[i * width + j];
+    if (step === 1) pairs.push({ before: before[--i] });
+    else if (step === 2) pairs.push({ after: after[--j] });
+    else pairs.push({ before: before[--i], after: after[--j] });
+  }
+  return pairs
+    .reverse()
+    .map((pair) =>
+      pair.before && pair.after
+        ? diffNode(pair.before, pair.after, deadline)
+        : markNode((pair.before ?? pair.after) as Node, !!pair.after),
+    )
+    .join("");
+}
+
 function diffNodes(before: Node[], after: Node[], deadline: number): string {
-  const visibleNode = (node: Node) =>
-    node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE;
+  const blockTags = new Set([
+    "P",
+    "DIV",
+    "SECTION",
+    "ARTICLE",
+    "DETAILS",
+    "SUMMARY",
+    "BLOCKQUOTE",
+    "PRE",
+    "UL",
+    "OL",
+    "LI",
+    "TABLE",
+    "THEAD",
+    "TBODY",
+    "TFOOT",
+    "TR",
+    "TH",
+    "TD",
+    "H1",
+    "H2",
+    "H3",
+    "H4",
+    "H5",
+    "H6",
+    "HR",
+  ]);
+  const visibleNode = (node: Node) => {
+    if (node.nodeType === Node.ELEMENT_NODE) return true;
+    if (node.nodeType !== Node.TEXT_NODE) return false;
+    if (node.textContent?.trim()) return true;
+    // Formatting whitespace between block elements is not a visible diff anchor.
+    return ![node.previousSibling, node.nextSibling].some(
+      (sibling) => sibling instanceof Element && blockTags.has(sibling.tagName),
+    );
+  };
   before = before.filter(visibleNode);
   after = after.filter(visibleNode);
   const changes = diffArrays(before, after, {
@@ -119,31 +223,10 @@ function diffNodes(before: Node[], after: Node[], deadline: number): string {
     const part = changes[index];
     const next = changes[index + 1];
     if (part.removed && next?.added) {
-      // Keep identical descendants as anchors, then align compatible changed nodes.
-      const pairs = diffArrays(part.value, next.value, {
-        comparator: compatibleNodes,
-        timeout: Math.max(1, deadline - performance.now()),
-      });
-      if (pairs) {
-        let oldIndex = 0;
-        let newIndex = 0;
-        for (const pair of pairs) {
-          for (const node of pair.value) {
-            if (pair.removed) {
-              result += markNode(node, false);
-              oldIndex++;
-            } else if (pair.added) {
-              result += markNode(node, true);
-              newIndex++;
-            } else {
-              result += diffNode(
-                part.value[oldIndex++],
-                next.value[newIndex++],
-                deadline,
-              );
-            }
-          }
-        }
+      // Align changed elements by shared content so adjacent deletions stay separate.
+      const aligned = alignChangedNodes(part.value, next.value, deadline);
+      if (aligned !== null) {
+        result += aligned;
         index++;
         continue;
       }

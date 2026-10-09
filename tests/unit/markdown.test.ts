@@ -154,6 +154,49 @@ describe("rendered Markdown", () => {
     expect(container.querySelector("details p del")?.textContent).toBe("5");
     expect(container.textContent).not.toContain("secret");
   });
+  it.each([
+    [
+      "paragraphs",
+      "Alpha unchanged\n\nBeta five\n\nGamma unchanged",
+      "Beta three\n\nGamma unchanged",
+    ],
+    [
+      "list items",
+      "- Alpha unchanged\n- Beta five\n- Gamma unchanged",
+      "- Beta three\n- Gamma unchanged",
+    ],
+    [
+      "table rows",
+      "| Item |\n| --- |\n| Alpha unchanged |\n| Beta five |\n| Gamma unchanged |",
+      "| Item |\n| --- |\n| Beta three |\n| Gamma unchanged |",
+    ],
+  ])(
+    "keeps adjacent additions/deletions separate from edits in %s",
+    (_kind, before, after) => {
+      for (const reverse of [false, true]) {
+        const container = document.createElement("div");
+        container.innerHTML = renderMarkdown(
+          reverse ? after : before,
+          reverse ? before : after,
+          true,
+        );
+        const deleted = Array.from(
+          container.querySelectorAll(".change.removed"),
+          (node) => node.textContent?.trim(),
+        );
+        const added = Array.from(
+          container.querySelectorAll(".change.added"),
+          (node) => node.textContent?.trim(),
+        );
+        expect(deleted).toEqual(
+          reverse ? ["three"] : ["Alpha unchanged", "five"],
+        );
+        expect(added).toEqual(
+          reverse ? ["Alpha unchanged", "five"] : ["three"],
+        );
+      }
+    },
+  );
   it("marks a changed reference link destination", () => {
     const diff = renderMarkdown(
       "[案内][guide]\n\n[guide]: ./old.md",

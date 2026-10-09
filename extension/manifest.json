@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "GitHub Markdown PR Viewer",
+  "description": "PRのMarkdownを文書・差分モードで読む、ツリーと最大化つきプレビュー。",
+  "version": "0.1.0",
+  "minimum_chrome_version": "123",
+  "permissions": ["storage"],
+  "host_permissions": ["https://api.github.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": { "default_title": "Markdownプレビューの設定" }
+}

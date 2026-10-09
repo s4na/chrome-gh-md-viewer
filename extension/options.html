@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Markdownプレビューの設定</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>GitHub Markdown PR Viewer</h1>
+      <p>公開リポジトリはトークンなしで利用できます。</p>
+      <form id="settings">
+        <label for="token">GitHub APIトークン（任意）</label>
+        <input id="token" type="password" autocomplete="off" spellcheck="false" />
+        <p>非公開リポジトリには、対象リポジトリの Contents と Pull requests の読み取り権限を持つ fine-grained token を設定してください。</p>
+        <p>トークンはこの端末の拡張ストレージに保存し、GitHub APIのみに送信します。削除するには空欄で保存します。</p>
+        <button type="submit">保存</button>
+        <p id="status" role="status"></p>
+      </form>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>
